@@ -1,0 +1,6 @@
+id=CoolCharge
+name=ChargeGuard
+version=v1.0.0
+versionCode=6
+author=pumu
+description=充电守护：温度低于 ON 阈值时强制放开限流(cool_down=0)，高于 OFF 交还系统温控，防止充电被莫名锁功率。

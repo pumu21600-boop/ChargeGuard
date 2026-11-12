@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<link rel="stylesheet" type="text/css" href="/internal/insets.css" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="theme-color" content="#0d0f12">
+<meta name="color-scheme" content="dark">
+<title>ChargeGuard 温控</title>
+<style>
+:root{--bg:#0d0f12;--card:#171a1f;--line:#262a31;--tx:#e8eaed;--sub:#8b9199;--ok:#3ddc84;--warn:#ffb020;--err:#ff5c5c;--acc:#4c8dff;color-scheme:dark}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:var(--bg)}
+body{margin:0;color:var(--tx);font:15px/1.5 -apple-system,"Noto Sans SC",sans-serif;
+  padding:calc(var(--safe-area-inset-top,0px) + 14px) 14px calc(var(--safe-area-inset-bottom,0px) + 40px)}
+h1{font-size:19px;margin:2px 0 14px;font-weight:600}
+h1 span{font-size:12px;color:var(--sub);font-weight:400;margin-left:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.lbl{font-size:12px;color:var(--sub);margin-bottom:10px;letter-spacing:.5px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.k{background:#1e2127;border-radius:10px;padding:9px 6px;text-align:center}
+.k b{display:block;font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.k i{display:block;font-size:10px;color:var(--sub);font-style:normal;margin-top:2px}
+.big{font-size:34px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.big small{font-size:14px;color:var(--sub);font-weight:400}
+.row{display:flex;align-items:center;gap:10px;margin:12px 0}
+.row input[type=range]{flex:1;height:26px;-webkit-appearance:none;background:transparent}
+input[type=range]::-webkit-slider-runnable-track{height:5px;background:#2c3138;border-radius:3px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;background:var(--acc);border-radius:50%;margin-top:-8px;box-shadow:0 0 0 4px rgba(76,141,255,.18)}
+.v{min-width:62px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.v em{font-style:normal;color:var(--sub);font-size:12px;font-weight:400}
+button{font:inherit;color:var(--tx);background:#23272e;border:1px solid var(--line);border-radius:10px;padding:9px 14px;cursor:pointer}
+button:active{transform:scale(.97)}
+.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600;width:100%;padding:13px;margin-top:4px}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--sub);word-break:break-all;margin-top:8px;max-height:70px;overflow:auto}
+#toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px);background:#2a2f37;border:1px solid var(--line);padding:10px 18px;border-radius:22px;font-size:14px;opacity:0;transition:.22s;pointer-events:none;z-index:9}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<h1>ChargeGuard 温控<span>cool_down 智能守护</span></h1>
+
+<div class="card">
+  <div class="lbl">实时状态</div>
+  <div class="big" id="t">--<small> ℃</small></div>
+  <div class="grid" style="margin-top:12px">
+    <div class="k"><b id="p">--</b><i>功率 W</i></div>
+    <div class="k"><b id="i">--</b><i>电流 A</i></div>
+    <div class="k"><b id="v">--</b><i>电压 V</i></div>
+    <div class="k"><b id="cd">--</b><i>cool_down</i></div>
+    <div class="k"><b id="st">--</b><i>脚本状态</i></div>
+    <div class="k"><b id="usb">--</b><i>插线</i></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="lbl">阈值设定（℃）· 低于 ON 强制放开 · 高于 OFF 交还系统</div>
+  <div class="row"><span style="width:34px;color:var(--sub)">ON</span><input type="range" id="onR" min="30" max="48" step="0.1"><span class="v" id="onV">--<em>℃</em></span></div>
+  <div class="row"><span style="width:34px;color:var(--sub)">OFF</span><input type="range" id="offR" min="32" max="52" step="0.1"><span class="v" id="offV">--<em>℃</em></span></div>
+  <button class="pri" id="save">保存并立即生效</button>
+  <div class="mono" id="log">初始化…</div>
+</div>
+
+<div class="card">
+  <div class="lbl">进程管理</div>
+  <div style="display:flex;gap:8px">
+    <button id="restart" style="flex:1">重启脚本</button>
+    <button id="stop" style="flex:1">停止</button>
+    <button id="start" style="flex:1">启动</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script>
+var F='/data/adb/modules/CoolCharge/daemon.sh';
+var ON=0, OFF=0, KSU=null;
+
+function toast(m){var e=document.getElementById('toast');e.textContent=m;e.className='show';clearTimeout(e._t);e._t=setTimeout(function(){e.className='';},1800)}
+function log(m){document.getElementById('log').textContent=m}
+function num(s){var v=parseFloat(s);return isNaN(v)?0:v}
+function $(id){return document.getElementById(id)}
+
+// BakaSU: addJavascriptInterface(..., "ksu")，exec(cmd, cb) 仅两参
+function findKSU(){
+  if(window.ksu&&window.ksu.exec)return window.ksu;
+  if(window.kernelsu&&window.kernelsu.exec)return window.kernelsu;
+  return null;
+}
+function exec(cmd){
+  var k=findKSU();
+  if(!k)return Promise.reject(new Error('ksu 未注入'));
+  return new Promise(function(res,rej){
+    var cb='cb_'+(Date.now()%100000)+'_'+(Math.random()*1000|0);
+    window[cb]=function(errno,stdout,stderr){
+      delete window[cb];
+      res({errno:errno,stdout:stdout||'',stderr:stderr||''});
+    };
+    try{k.exec(cmd,cb);}catch(e){delete window[cb];rej(e);}
+  });
+}
+function boot(){
+  var k=findKSU();
+  if(k){KSU=k;log('ksu API 就绪');startLoop();}
+  else{
+    var n=0,t=setInterval(function(){
+      if(findKSU()){clearInterval(t);KSU=findKSU();log('ksu API 就绪(延迟)');startLoop();}
+      else if(++n>20){clearInterval(t);log('ksu API 未注入，请换管理器或反馈');}
+    },250);
+  }
+}
+function startLoop(){
+  readConf();refresh();setInterval(refresh,1000);
+}
+
+function readConf(){
+  return exec("grep -E '^ON=|^OFF=' "+F).then(function(r){
+    if(r.errno!==0){log('读取失败: '+r.stderr);return}
+    var m=r.stdout.match(/^ON=(\d+)/m), n=r.stdout.match(/^OFF=(\d+)/m);
+    if(m)ON=num(m[1]); if(n)OFF=num(n[1]);
+    $('onR').value=ON/10; $('offR').value=OFF/10;
+    $('onV').innerHTML=(ON/10).toFixed(1)+'<em>℃</em>';
+    $('offV').innerHTML=(OFF/10).toFixed(1)+'<em>℃</em>';
+  }).catch(function(e){log('err: '+e.message)});
+}
+function refresh(){
+  var cmd='echo "T=$(cat /sys/class/power_supply/battery/temp)";'+
+          'echo "I=$(cat /sys/class/power_supply/battery/current_now)";'+
+          'echo "V=$(cat /sys/class/power_supply/battery/voltage_now)";'+
+          'echo "CD=$(cat /sys/devices/virtual/oplus_chg/battery/cool_down 2>/dev/null)";'+
+          'echo "USB=$(cat /sys/class/power_supply/usb/online 2>/dev/null)";'+
+          'echo "ST=$(cat /data/local/tmp/coolcharge.state 2>/dev/null)";'+
+          'echo "NOW=$(date +%s)"';
+  return exec(cmd).then(function(r){
+    if(r.errno!==0)return;
+    var T=num((r.stdout.match(/^T=(\d+)/m)||[])[1]);
+    var I=num((r.stdout.match(/^I=(-?\d+)/m)||[])[1]);
+    var V=num((r.stdout.match(/^V=(\d+)/m)||[])[1]);
+    var CD=(r.stdout.match(/^CD=(\d+)/m)||[])[1]||'-';
+    var USB=(r.stdout.match(/^USB=(\d+)/m)||[])[1]||'0';
+    var ST=(r.stdout.match(/^ST=(\d+)/m)||[])[1]||'0';
+    var HB=num((r.stdout.match(/^ST=\d+\s+\d+\s+(\d+)/m)||[])[1]);
+    var NOW=num((r.stdout.match(/^NOW=(\d+)/m)||[])[1]);
+    // 心跳超过 5 秒视为守护已死，不再被残留 state 文件骗
+    var alive=(HB>0 && NOW>0 && (NOW-HB)<=5);
+    var stTxt=!alive?'已停止':(USB!=='1')?'待机':(ST==='1'?'写入中':'交还系统');
+    $('t').innerHTML=(T/10).toFixed(1)+'<small> ℃</small>';
+    $('i').textContent=(Math.abs(I)/1000).toFixed(1);
+    $('v').textContent=(V/1e6).toFixed(2);
+    $('p').textContent=(Math.abs(I)/1000*V/1e6).toFixed(1);
+    $('cd').textContent=CD;
+    $('cd').style.color=(CD==='0')?'var(--ok)':'var(--warn)';
+    $('usb').textContent=(USB==='1')?'是':'否';
+    $('st').textContent=stTxt;
+    $('st').style.color=(stTxt==='写入中')?'var(--ok)':(stTxt==='已停止'?'var(--err)':'var(--sub)');
+  }).catch(function(e){log('读取失败: '+e.message)});
+}
+function save(){
+  var on=Math.round(parseFloat($('onR').value)*10);
+  var off=Math.round(parseFloat($('offR').value)*10);
+  if(off<=on){toast('OFF 必须大于 ON');return}
+  var cmd='sed "s/^ON=.*/ON='+on+'/; s/^OFF=.*/OFF='+off+'/" '+F+' > /data/local/tmp/cg.tmp && cat /data/local/tmp/cg.tmp > '+F+' && echo OK';
+  exec(cmd).then(function(r){
+    if(r.errno===0&&r.stdout.indexOf('OK')>=0){
+      ON=on;OFF=off;
+      toast('已保存 '+(on/10).toFixed(1)+'/'+(off/10).toFixed(1)+'℃');
+      log('保存成功: ON='+on+' OFF='+off+' · inode 未变，运行中的脚本已读到');
+      readConf();setTimeout(refresh,1200);
+    }else{toast('保存失败');log('保存失败: '+r.stderr)}
+  }).catch(function(e){toast('保存失败');log('err: '+e.message)});
+}
+function proc(act){
+  var c;
+  if(act==='restart')c='touch /data/local/tmp/coolcharge.stop; sleep 2; rm -f /data/local/tmp/coolcharge.stop; sh /data/adb/modules/CoolCharge/service.sh; sleep 2; kill -0 $(cat /data/local/tmp/coolcharge.pid 2>/dev/null) 2>/dev/null && echo RUNNING || echo DEAD';
+  if(act==='stop')c='touch /data/local/tmp/coolcharge.stop; sleep 2; kill -0 $(cat /data/local/tmp/coolcharge.pid 2>/dev/null) 2>/dev/null && echo RUNNING || echo STOPPED';
+  if(act==='start')c='rm -f /data/local/tmp/coolcharge.stop; sh /data/adb/modules/CoolCharge/service.sh; sleep 2; kill -0 $(cat /data/local/tmp/coolcharge.pid 2>/dev/null) 2>/dev/null && echo RUNNING || echo DEAD';
+  exec(c).then(function(r){
+    log(act+' -> '+(r.stdout||'').trim().replace(/\n/g,' ')+(r.stderr?' | '+r.stderr.trim():''));
+    toast(act==='stop'?'已停止':'已启动');
+    setTimeout(refresh,1500);
+  }).catch(function(e){log('err: '+e.message)});
+}
+$('onR').oninput=function(){$('onV').innerHTML=parseFloat(this.value).toFixed(1)+'<em>℃</em>'};
+$('offR').oninput=function(){$('offV').innerHTML=parseFloat(this.value).toFixed(1)+'<em>℃</em>'};
+$('save').onclick=save;
+$('restart').onclick=function(){proc('restart')};
+$('stop').onclick=function(){proc('stop')};
+$('start').onclick=function(){proc('start')};
+boot();
+</script>
+</body>
+</html>
